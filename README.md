@@ -101,7 +101,9 @@ O dashboard concentra o estado atual e o histórico de cada câmara. Nele aparec
 - central de notificações;
 - configurações de limites e monitoramento.
 
-<!-- screenshot do dashboard aqui -->
+<p align="center">
+  <img src="imgs/dash.png" alt="Dashboard web do SERENO" width="900">
+</p>
 
 As consultas e a visualização são públicas no comportamento atual. Ações que alteram configurações ou o estado compartilhado das notificações pedem autenticação administrativa.
 
