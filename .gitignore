@@ -1,0 +1,78 @@
+# Configuracao local e segredos
+.env
+.env.*
+!.env.example
+
+# Configuracoes privadas do firmware
+esp/config*.h
+esp/config*.hpp
+esp/secrets*.h
+esp/secrets*.hpp
+esp/credentials*.h
+esp/credentials*.hpp
+!esp/config.example.h
+
+# Dados operacionais e runtime; preserve somente a protecao publica do diretorio
+data/**
+!data/.htaccess
+
+# SQLite e arquivos auxiliares, mesmo se criados fora de data/
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Logs, locks, sessoes e temporarios
+*.log
+*.lock
+*.tmp
+*.temp
+sess_*
+sessions/
+tmp/
+temp/
+cache/
+*~
+*.swp
+*.swo
+
+# Backups, dumps e arquivos compactados
+*.bak
+*.backup
+*.old
+*.orig
+*.dump
+*.sql
+*.zip
+*.7z
+*.rar
+*.gz
+*.bz2
+*.xz
+*.tar
+*.tar.gz
+*.tgz
+backups/
+
+# Chaves e certificados privados locais
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Configuracoes locais de editor e sistema operacional
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+
+# Arquivos internos de desenvolvimento
+prompt.md
+AUDITORIA_GITHUB.md
+RELATORIO_*.md
