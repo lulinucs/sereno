@@ -1,89 +1,258 @@
-# Monitor de câmaras frias
+# SERENO
 
-ESP8266 + BME280 envia temperatura, umidade e pressão para a API PHP. O SQLite em `data/camara.sqlite` guarda leituras, configurações, estado do Alert Engine, eventos e o estado de leitura do centro de notificações. O dashboard consome somente a API. `monitor.php` verifica offline por tarefa agendada.
+**câmara esperta**
 
-## Estrutura
+Monitoramento de câmaras frias com ESP8266, BME280, PHP, SQLite e um dashboard web.
 
-| Arquivo | Função |
+O SERENO existe para acompanhar temperatura, umidade e pressão sem depender de uma conferência manual o tempo todo. Um ESP8266 lê o sensor BME280 e envia os dados periodicamente para o servidor, que registra o histórico e disponibiliza tudo no navegador.
+
+Enquanto as leituras chegam, o Alert Engine observa os limites de temperatura e o estado de cada dispositivo. Se algo sai do esperado — ou se uma câmara deixa de responder — o sistema registra a mudança como um evento.
+
+<p align="center">
+  <img src="imgs/sereno_pronto_com_caixinha_e_adesivo.jpg" alt="SERENO montado em sua caixa, com cabo e sensor" width="420">
+</p>
+
+O projeto nasceu para uso real, mas continua sendo pessoal e experimental: pequeno o bastante para ser entendido por inteiro e aberto para quem quiser explorar, adaptar ou simplesmente acompanhar a construção.
+
+## O que ele faz
+
+- Mede temperatura, umidade e pressão.
+- Mantém histórico das leituras no SQLite.
+- Trabalha com múltiplas câmaras e dispositivos.
+- Permite configurar limites de temperatura por dispositivo.
+- Usa tolerância e histerese para evitar alertas precipitados.
+- Registra eventos de temperatura alta, baixa e normalização.
+- Detecta quando um dispositivo fica offline e quando volta a enviar.
+- Reúne eventos em uma central de notificações no dashboard.
+- Protege alterações administrativas com login e CSRF.
+- Oferece um dashboard responsivo para computador e celular.
+
+## Como funciona
+
+```text
+BME280
+   │  I²C
+   ▼
+ESP8266
+   │  HTTPS / JSON
+   ▼
+API PHP ─────────────┐
+   │                  │
+   ▼                  ▼
+SQLite ◄── Alert Engine
+   │                  ▲
+   ├── Dashboard       │
+   └── monitor.php ───┘
+          cron
+```
+
+- O **BME280** fornece as três medições ambientais.
+- O **ESP8266** monta o payload JSON e envia uma leitura por vez para `api.php`.
+- A **API PHP** valida o dispositivo e os valores recebidos antes de gravá-los.
+- O **SQLite** guarda dispositivos, leituras, estados, eventos e notificações lidas.
+- O **Alert Engine** acompanha temperatura, tolerância, histerese e mudanças de estado.
+- O **dashboard** consulta a API para apresentar os dados e as configurações.
+- O **monitor.php**, executado periodicamente, identifica dispositivos que pararam de enviar.
+
+## Hardware e montagem
+
+O dispositivo usa poucos componentes:
+
+- ESP8266 em uma placa NodeMCU;
+- sensor BME280;
+- alimentação USB;
+- comunicação I²C;
+- cabo CAT5 na montagem do sensor.
+
+O firmware inicializa o BME280 no endereço I²C `0x76` com esta pinagem:
+
+| BME280 | ESP8266 |
 | --- | --- |
-| `api.php` | Ingestão e consultas HTTP, sem mudança no protocolo do ESP |
-| `index.php` | Dashboard operacional, histórico, configurações e notificações |
-| `monitor.php` | Verificação offline via CLI/cron |
-| `src/database.php` | Conexão PDO SQLite, schema e transações |
-| `src/storage.php` | Leituras e consultas por dispositivo/período |
-| `src/device_repository.php` / `src/devices.php` | Persistência e validação de configurações |
-| `src/alert_engine.php` / `src/alert_persistence.php` | Regras existentes e persistência transacional |
-| `src/notifications.php` | Eventos e leitura no dashboard |
-| `scripts/migrate_sqlite.php` | Importação explícita dos JSONs antigos |
-| `scripts/add_device.php` | Cadastro CLI de um novo dispositivo |
-| `src/migration.php` | Validação, importação idempotente e comparação |
-| `src/admin_auth.php` | Sessão administrativa, CSRF e limite de tentativas |
+| VCC | 3V3 |
+| GND | GND |
+| SDA | D2 / GPIO4 |
+| SCL | D1 / GPIO5 |
 
-O schema tem `devices`, `readings`, `alert_states`, `events`, `notification_reads` e `admin_login_attempts`. Timestamps originais são preservados; colunas de época permitem consulta eficiente por período. Há índices `(device_id, recorded_epoch)` em leituras e `(device_id, created_epoch)` em eventos. A leitura de notificações é separada dos eventos; uma futura entrega por Telegram poderá ter tabela própria, sem alterar esses registros.
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="imgs/prototipo_esp822_bme280_na_proto.jpg" alt="Protótipo do SERENO com ESP8266 e BME280 em protoboard" width="360"><br>
+      <sub>O ESP8266 e o BME280 na fase de prototipagem.</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="imgs/bme280_cat5.jpg" alt="BME280 ligado ao cabo CAT5 usado na montagem" width="360"><br>
+      <sub>Sensor e cabeamento preparados para a montagem física.</sub>
+    </td>
+  </tr>
+</table>
 
-## Nova instalação ou migração
+O caminho foi direto: primeiro a protoboard, depois o cabeamento do sensor e, por fim, a eletrônica acomodada em uma caixa com a identidade do SERENO.
 
-Em uma instalação nova, crie primeiro um banco vazio com o schema atual:
+## Dashboard
+
+O dashboard concentra o estado atual e o histórico de cada câmara. Nele aparecem:
+
+- estado operacional do dispositivo;
+- horário da última leitura;
+- temperatura, umidade e pressão atuais;
+- gráfico de 1 hora, 6 horas, 24 horas ou 7 dias;
+- leituras recentes;
+- eventos do Alert Engine;
+- central de notificações;
+- configurações de limites e monitoramento.
+
+<!-- screenshot do dashboard aqui -->
+
+As consultas e a visualização são públicas no comportamento atual. Ações que alteram configurações ou o estado compartilhado das notificações pedem autenticação administrativa.
+
+## Alert Engine
+
+O Alert Engine tenta separar uma oscilação breve de um problema que realmente merece atenção.
+
+Cada dispositivo tem limites mínimo e máximo de temperatura. Quando uma leitura cruza um desses limites, a condição fica pendente durante o tempo de tolerância configurado. Se ela continuar, o estado passa a `TEMP_ALTA` ou `TEMP_BAIXA`.
+
+A histerese cria uma pequena margem para o retorno ao normal. Assim, uma temperatura oscilando exatamente sobre o limite não fica alternando o estado a cada leitura. Quando a medição volta para a faixa segura, o dispositivo retorna a `NORMAL`.
+
+Se as leituras param de chegar, o monitor periódico muda o estado para `OFFLINE`. A próxima leitura válida registra o retorno `ONLINE`.
+
+Os estados internos são `NORMAL`, `TEMP_ALTA`, `TEMP_BAIXA` e `OFFLINE`. As transições geram eventos como `TEMP_HIGH`, `TEMP_LOW`, `NORMALIZED`, `OFFLINE` e `ONLINE`.
+
+## Estrutura do projeto
+
+| Caminho | Papel |
+| --- | --- |
+| `esp/` | Firmware Arduino e exemplo de configuração privada do dispositivo |
+| `src/` | Banco, dispositivos, autenticação, persistência e regras do Alert Engine |
+| `scripts/` | Inicialização do banco, cadastro de dispositivo e migração legada |
+| `tests/` | Testes PHP com bancos temporários ou em memória |
+| `data/` | SQLite e arquivos de runtime locais, fora do versionamento |
+| `imgs/` | Fotos da construção e do dispositivo pronto |
+| `api.php` | Ingestão das leituras e endpoints usados pelo dashboard |
+| `index.php` | Interface web do SERENO |
+| `monitor.php` | Verificação de dispositivos offline por CLI/cron |
+
+## Instalação
+
+### Servidor
+
+Requisitos:
+
+- PHP com PDO SQLite;
+- servidor web;
+- HTTPS;
+- cron ou tarefa agendada para `monitor.php`.
+
+Crie a configuração local a partir do exemplo:
+
+```bash
+cp .env.example .env
+```
+
+Preencha o `.env` somente no servidor. Ele define o caminho do SQLite, o dispositivo padrão, o hash administrativo e os tokens individuais dos dispositivos.
+
+Crie um banco vazio com o schema atual:
 
 ```bash
 php scripts/init_db.php
 ```
 
-O comando cria `data/camara.sqlite` sem dispositivos, leituras, eventos ou configurações. O cadastro posterior continua sendo feito pelos mecanismos existentes do projeto.
+O comando cria `data/camara.sqlite`, sem dispositivos, leituras ou eventos. O diretório `data/` precisa ser gravável pelo usuário do PHP para que o SQLite também possa criar seus arquivos auxiliares.
 
-1. Confirme `pdo_sqlite` no PHP usado pelo site e pelo CLI: `php -r "var_export(in_array('sqlite', PDO::getAvailableDrivers(), true));"`. No servidor, confirme também no PHP web, por exemplo com `phpinfo()` temporário protegido.
-2. Faça backup dos cinco JSONs em `data/`: `leituras.json`, `events.json`, `state.json`, `devices.json` e `notification_state.json`. Pare temporariamente envios e o cron durante a migração para ter um recorte consistente.
-3. Configure `.env` a partir de `.env.example`. `SQLITE_FILE` tem padrão `data/camara.sqlite`; mantenha `DEFAULT_DEVICE` igual ao usado no histórico legado. Tokens do ESP permanecem nas variáveis `DEVICE_<ID>_TOKEN`.
-4. Execute `php scripts/migrate_sqlite.php`. Para importar um diretório de backup específico, use `php scripts/migrate_sqlite.php /caminho/dos/jsons /caminho/do/camara.sqlite camara-01`.
-5. Leia os totais verificados do comando: dispositivos, leituras por câmara, eventos, estados e notificações lidas. Repita o comando: os totais de origem devem permanecer iguais, sem duplicação no banco. Um JSON inválido causa erro e a importação transacional não é aplicada.
-6. Reative envios e cron; consulte `api.php?action=overview`, `api.php?action=data&device_id=camara-01&hours=24`, o dashboard e o centro de notificações. Teste um envio real ou controlado antes de encerrar a manutenção.
+Para cadastrar o primeiro dispositivo, crie temporariamente um JSON com sua configuração:
 
-O script importa com `INSERT OR IGNORE`: uma segunda execução não sobrescreve configurações ou estados que tenham mudado no SQLite. JSONs antigos não são lidos pela operação normal, nem apagados pela migração. Após validar e manter uma cópia de backup, podem ser arquivados manualmente. A antiga cópia `leituras.json` da raiz não participa da migração.
+```json
+{
+  "nome": "Câmara 1",
+  "habilitado": true,
+  "temperatura_min": 1,
+  "temperatura_max": 8,
+  "tolerancia_minutos": 5,
+  "offline_minutos": 5,
+  "histerese_temperatura": 0.5,
+  "monitoramentos": {
+    "temperatura": true,
+    "offline": true
+  }
+}
+```
 
-## API e Alert Engine
+Depois execute:
 
-O ESP mantém o mesmo `POST api.php?action=push`, corpo JSON (`device_id`, `temperatura`, `umidade`, `pressao`) e cabeçalho opcional `X-Device-Token`. Validações, códigos HTTP e formato da resposta são mantidos. A API grava a leitura e aplica o Alert Engine dentro de uma transação. O motor conserva os estados `NORMAL`, `TEMP_ALTA`, `TEMP_BAIXA`, `OFFLINE`, a tolerância, histerese e os eventos `TEMP_HIGH`, `TEMP_LOW`, `NORMALIZED`, `OFFLINE`, `ONLINE`.
+```bash
+php scripts/add_device.php camara-01 dispositivo.json
+```
 
-O dashboard usa `GET action=devices`, `GET/POST action=device_config`, `GET action=overview`, `GET action=data&device_id=...&hours=1|6|24|168`, `GET action=events` e os POSTs de notificação existentes. `action=data` consulta somente o período pedido (no mínimo 24h para preservar a tabela de leituras recentes), mais a última leitura da câmara. Tokens de dispositivos não são retornados pela API.
+O identificador usado aqui deve corresponder ao `DEVICE_ID` do ESP. Para autenticar a ingestão, configure o token equivalente no `.env`, seguindo o formato `DEVICE_CAMARA_01_TOKEN`, e o mesmo valor no arquivo privado do firmware.
 
-## Acesso administrativo
+### ESP8266
 
-O painel e as consultas continuam públicos. Ao abrir configurações ou usar ações que alteram o estado compartilhado das notificações, o painel pede a senha administrativa uma vez por sessão. O backend exige sessão administrativa **e** CSRF para `POST action=device_config`, `notification_read`, `notifications_read_all` e `test_notification`. `POST action=push` do ESP continua independente da sessão; o token opcional do dispositivo permanece como antes. `POST action=login`, `POST action=logout` e `GET action=auth_status` completam o fluxo.
+Copie o exemplo de configuração:
 
-Defina `ADMIN_PASSWORD_HASH` no `.env` privado. Para gerar o hash da senha escolhida, execute no terminal:
+```bash
+cp esp/config.example.h esp/config.h
+```
+
+No `esp/config.h` privado, configure:
+
+- `DEVICE_ID`: identificador cadastrado no servidor;
+- `DEVICE_TOKEN`: token correspondente no `.env`;
+- `API_URL`: endereço HTTPS completo de `api.php`;
+- `WIFI_SSID_1` e `WIFI_PASSWORD_1`: rede principal;
+- `WIFI_SSID_2` e `WIFI_PASSWORD_2`: rede reserva;
+- `SEND_INTERVAL_MS`: intervalo entre os envios.
+
+O sketch atual usa os nomes com sufixos `_1` e `_2` para as duas redes. Ao preparar o arquivo privado a partir do exemplo, ajuste as definições de Wi-Fi para esses nomes.
+
+Bibliotecas usadas pelo firmware:
+
+- ESP8266WiFi, WiFiClientSecure e ESP8266HTTPClient, fornecidas pelo core Arduino para ESP8266;
+- Wire;
+- Adafruit Unified Sensor;
+- Adafruit BME280 Library.
+
+Com as bibliotecas instaladas, abra `esp/esp.ino`, selecione a placa ESP8266 correspondente e envie o sketch. `esp/config.h` contém credenciais locais e não deve ser versionado.
+
+## Administração
+
+O dashboard e os endpoints de leitura são públicos. As operações de escrita do painel exigem uma sessão administrativa e um token CSRF válido.
+
+A senha não fica gravada no código. O servidor recebe `ADMIN_PASSWORD_HASH` pelo `.env` e valida o login com `password_verify()`.
+
+Para gerar o hash, execute:
 
 ```bash
 php -r "echo password_hash(trim(fgets(STDIN)), PASSWORD_DEFAULT), PHP_EOL;"
 ```
 
-Digite a senha quando o comando aguardar entrada e copie **somente o hash** exibido para `ADMIN_PASSWORD_HASH=`. Não copie a senha em texto puro para o `.env` nem para arquivos publicados. O `.env.example` contém apenas um placeholder. Se o hash não estiver configurado, consultas e telemetria seguem funcionando, mas o login administrativo retorna indisponível.
+Digite a senha quando o comando aguardar a entrada e copie apenas o hash resultante para o `.env`.
 
-A sessão usa cookie `HttpOnly`, `SameSite=Strict` e `Secure` quando a requisição chega por HTTPS, com regeneração do ID no login/logout e expiração após 8 horas sem ação administrativa. Cinco falhas de senha em uma janela de 15 minutos bloqueiam novos logins do mesmo endereço por 5 minutos. O bloqueio fica no mesmo SQLite. Ações de leitura de notificações requerem login porque o estado de leitura é global neste projeto, não pessoal por usuário.
+## Detecção de offline
 
-`monitor.php` continua sendo executado por cron ou tarefa agendada aproximadamente a cada minuto, por exemplo `* * * * * /usr/bin/php /caminho/do/projeto/monitor.php`. Ele usa a mesma base e transações da ingestão. Não há daemon nem dependência de SQLite CLI.
+O ESP pode simplesmente parar de enviar: falta de energia, Wi-Fi indisponível ou uma falha no dispositivo não produzem uma requisição para avisar o servidor.
 
-## Permissões e proteção
+Por isso, `monitor.php` consulta periodicamente a última leitura de cada câmara. Quando o tempo configurado é ultrapassado, ele registra o estado `OFFLINE` e o evento correspondente. O script aceita apenas execução por CLI.
 
-`data/.htaccess` nega acesso HTTP direto ao diretório em Apache 2.4. Em Nginx, adicione regra equivalente. O `.htaccess` da raiz protege `.env`. A visualização do dashboard é pública por decisão do projeto; restrinja a rede ou use autenticação HTTP adicional se a telemetria também precisar ser privada.
+Exemplo de cron a cada minuto:
 
-- **VPS Apache/PHP com `www-data`:** dê ao usuário do PHP permissão de leitura e escrita em `data/`, e de criação de arquivos auxiliares SQLite no diretório. Um proprietário/grupo apropriado e modo `2775` no diretório, `664` no banco, podem ser usados quando `www-data` pertence ao grupo. Ajuste à política local e evite `777`.
-- **HostGator/hospedagem compartilhada:** use o gerenciador de arquivos ou painel para que o usuário da conta executando PHP tenha escrita em `data/` e no banco. Normalmente `755` no diretório e `644` ou `664` no banco funcionam quando o proprietário é o usuário PHP; confirme a identidade real do processo. Não assuma root nem grupo `www-data`.
+```cron
+* * * * * /usr/bin/php /caminho/sereno/monitor.php
+```
 
-SQLite usa `busy_timeout=5000`, `foreign_keys=ON` e journal `DELETE`, adequado ao armazenamento local simples e evitando dependência de WAL/SHM persistentes em hospedagem compartilhada. Ainda assim, o diretório deve permitir a criação de journal temporário. Não coloque o banco em filesystem remoto sem verificar o suporte a locks.
+## Segurança
 
-## Backup e rollback
-
-Faça backup SQLite-safe com a API de backup do SQLite ou `VACUUM INTO` em uma conexão SQLite, quando suportado. Não copie `camara.sqlite` diretamente enquanto o PHP escreve. Preserve também os JSONs originais como retrato pré-migração. Para rollback manual, pare envios e cron, restaure a versão anterior da aplicação com os JSONs de backup e reconcilie separadamente os dados produzidos desde a migração; voltar apenas o código perde leituras novas. Não há rollback automático.
-
-## Novo dispositivo
-
-Crie um arquivo JSON temporário com os mesmos campos de uma configuração de `data/devices.json` legado (por exemplo `nome`, `habilitado`, limites, tolerância, tempo offline, histerese e `monitoramentos`). Execute `php scripts/add_device.php camara-03 /caminho/config.json`. O script valida e insere no SQLite; depois remova o arquivo temporário se não for necessário. Configure `DEVICE_CAMARA_03_TOKEN` no `.env` caso a autenticação seja usada. O painel atual permite editar dispositivos já cadastrados. Ajuste o `DEVICE_ID` e token do ESP correspondente; o protocolo HTTP permanece igual.
+- `.env` guarda configurações e hashes privados e não deve entrar no Git.
+- `esp/config.h` guarda Wi-Fi, endpoint e token do dispositivo e também deve permanecer privado.
+- Cada dispositivo pode enviar seu `DEVICE_TOKEN` pelo cabeçalho `X-Device-Token`.
+- A senha administrativa é armazenada como hash, não em texto puro.
+- O diretório `data/` precisa ser bloqueado para acesso HTTP. O projeto inclui proteção para Apache em `data/.htaccess`; outros servidores exigem regra equivalente.
+- A comunicação com a API deve usar HTTPS.
 
 ## Testes
 
-Os testes criam bancos SQLite próprios em memória ou diretórios temporários e não tocam `data/camara.sqlite`:
+Os testes usam SQLite em memória ou arquivos temporários e não acessam o banco operacional:
 
 ```bash
+php tests/init_db_test.php
 php tests/alert_engine_test.php
 php tests/panel_notifications_test.php
 php tests/sqlite_migration_test.php
@@ -92,4 +261,34 @@ php tests/api_sqlite_test.php
 php tests/admin_auth_test.php
 ```
 
-Para lint: `php -l api.php`, `php -l index.php`, `php -l monitor.php` e `php -l` nos arquivos de `src/`, `scripts/` e `tests/`.
+Para verificar a sintaxe de todos os arquivos PHP:
+
+```bash
+php -l api.php
+php -l index.php
+php -l monitor.php
+```
+
+## Instalações antigas e migração
+
+As primeiras versões do SERENO armazenavam dispositivos, leituras, estados e eventos em JSON. O comando abaixo existe para importar esses arquivos legados para o schema SQLite atual:
+
+```bash
+php scripts/migrate_sqlite.php
+```
+
+Instalações novas devem usar `scripts/init_db.php`; a migração é necessária apenas para preservar dados de uma instalação antiga.
+
+## Limitações conhecidas
+
+- A integração com Telegram ainda não foi implementada.
+- O firmware usa atualmente `setInsecure()` na conexão HTTPS e, portanto, não valida o certificado apresentado pelo servidor.
+- A detecção de dispositivos offline depende da execução periódica de `monitor.php`.
+- Dashboard, telemetria, eventos e configurações de leitura são públicos; somente as operações administrativas de escrita exigem login.
+- Novos dispositivos são cadastrados por CLI; o dashboard edita dispositivos existentes, mas não cria nem remove cadastros.
+
+## Sobre o projeto
+
+O SERENO nasceu de uma necessidade bem concreta: enxergar o que está acontecendo dentro de uma câmara fria antes que o problema seja percebido tarde demais.
+
+Ele foi tomando forma entre protoboard, fios, leituras reais e pequenos ajustes no uso diário. O resultado é este projeto: um aparelho físico de verdade, com um backend simples e código suficiente para medir, guardar e contar a história do ambiente que acompanha.
